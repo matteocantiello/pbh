@@ -196,16 +196,9 @@
                M_cav = 8 * pi / 3 * rho * pow(R_B, 3)       ! mass of cavity (g)
                new_core_mass = (M_BH_new + M_cav) / Msun    ! new core mass (Msun)
    
-              ! if (new_core_mass > s% m(1)) then 
-              !    write(*,*) 'WARNING: BH Mass > Mstar'
-              !    write(*,*) 'new_core_mass/Msun:', new_core_mass
-              !    write(*,*) 's% m(1)/Msun:', s% m(1)
-              ! endif  
-   
                      
                core_avg_eps = L_BH / (new_core_mass * Msun) ! average energy generation rate (erg / g s) is zero in the no feedback accretion case
                core_avg_rho = 1 / (4 / 3 * pi) * (new_core_mass * Msun) / pow(R_B, 3) ! average core density (g / cm^3)
-               !s% max_timestep = timestep_factor * M_BH / M_dot ! maximum timestep (s)
              else  
                 write(*,*) 'Disk Accretion'
                 M_dot_BH = 16*pi / (rad_eff / (1 - rad_eff)) * con_eff/gamma1/c_s*rho * pow(G*M_BH, 2) / c2 ! g/s This is Bondi limited by convection efficiency 
@@ -268,9 +261,7 @@
              print*, 'M_BH/M_sun: ', M_BH_new / Msun
              print*, 'L_BH/L_sun: ', L_BH / Lsun
              print*, 'new_core_mass/M_sun: ', new_core_mass
-             print*, 's% mstar:', s% mstar 
              print*, 'M_dot (M_sun/yr):',M_dot/Msun*secyer
-             print*, 's% mstar - rad_eff * M_dot * dt - s% M_center:',s% xmstar !cgs
              print*, 'radiative efficiency: ', rad_eff
              print*, 'log (j_Bondi / j_ISCO)', s% xtra(14)
              print*, '-----------------------------'
