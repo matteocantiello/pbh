@@ -101,7 +101,10 @@
              real(dp) :: core_avg_rho, core_avg_eps, new_core_mass
              real(dp) :: j_ISCO, j_B, j_B_div_j_ISCO
              real(dp) :: max_accretion_fraction, available_mass, max_dm
-             integer :: k_B
+             real(dp) :: r_center, r_surface 
+             integer :: k_B, k_lo, k_hi
+      
+
              
              rad_eff = s% x_ctrl(1) ! epsilon 
              con_eff = s% x_ctrl(2) ! eta 
@@ -127,23 +130,55 @@
              L_Edd = 4*pi * clight * G * M_BH / opacity  ! erg/s
    
              j_ISCO = 6d0 * G*M_BH / clight      ! Angular momentum required for circularization around Schwarzschild BH 
-             k_B = minloc(abs(s%r - R_B), dim=1) ! Find grid position of R_B
+             !k_B = minloc(abs(s%r - R_B), dim=1) ! Find grid position of R_B
+
+
+             r_center  = s% r(s% nz)
+             r_surface = s% r(1)
+          
+             if (R_B <= r_center) then
+                ! Bondi radius lies inside the innermost resolved cell (closer to center)
+                k_B = s%nz
+                j_B = (2.0_dp/3.0_dp) * s%omega(k_B) * (R_B**2)
+                write(*,*) 'Bondi radius inside inner cell; extrapolated j_B from omega(nz).'
+          
+             else if (R_B >= r_surface) then
+                ! Bondi radius outside the star: clamp to surface value
+                k_B = 1
+                j_B = s%j_rot(k_B)
+                write(*,*) 'Bondi radius larger than star; using j at surface.'
+          
+             else
+                ! R_B lies within the stellar model; find enclosing radii
+                do k_hi = s%nz-1, 1, -1
+                   if ((s%r(k_hi) >= R_B) .and. (R_B >= s%r(k_hi+1))) then
+                      k_lo = k_hi + 1
+                      exit
+                   end if
+                end do
+          
+                ! Linear interpolation in (r, j_rot)
+                j_B = s%j_rot(k_hi) + (s%j_rot(k_lo) - s%j_rot(k_hi)) * &
+                      (R_B - s%r(k_hi)) / (s%r(k_lo) - s%r(k_hi))
+                k_B = k_hi
+             end if
+
    
-             if ((k_B >= 1) .and. (k_B <= s%nz)) then
-               j_B = s%j_rot(k_B)
+            !  if ((k_B >= 1) .and. (k_B <= s%nz)) then
+            !    j_B = s%j_rot(k_B)
             
-            else if (k_B > s%nz) then   ! Bondi radius smaller than inner zone: extrapolate
-               k_B = s%nz
-               j_B = (2.0_dp/3.0_dp) * s%omega(k_B) * pow(R_B, 2)
-               write(*,*) 'Bondi radius smaller than inner zone; j(nz)=', s%j_rot(k_B), &
-                           ' extrapolated=', (2.0_dp/3.0_dp) * s%omega(k_B) * (R_B**2)
+            ! else if (k_B > s%nz) then   ! Bondi radius smaller than inner zone: extrapolate
+            !    k_B = s%nz
+            !    j_B = (2.0_dp/3.0_dp) * s%omega(k_B) * pow(R_B, 2)
+            !    write(*,*) 'Bondi radius smaller than inner zone; j(nz)=', s%j_rot(k_B), &
+            !                ' extrapolated=', (2.0_dp/3.0_dp) * s%omega(k_B) * (R_B**2)
             
-            else                        ! k_B < 1
-               k_B = 1
-               j_B = s%j_rot(k_B)
-               write(*,*) 'Bondi radius larger than star; set R_B = R'
+            ! else                        ! k_B < 1
+            !    k_B = 1
+            !    j_B = s%j_rot(k_B)
+            !    write(*,*) 'Bondi radius larger than star; set R_B = R'
             
-            end if
+            ! end if
 
              j_B_div_j_ISCO = j_B / j_ISCO
    
@@ -165,7 +200,7 @@
                   write(*,*) 'ERROR: No available envelope mass for accretion'
                   write(*,*) 's% xmstar (envelope mass in g):', available_mass
                   write(*,*) 's% mstar (total mass in g):', s% mstar
-                  write(*,*) 's% M_center (core mass in Msun):', s% M_center
+                  write(*,*) 's% M_center (core mass in Msun):', s% M_center/Msun
                   ierr = -1
                   return
                endif
