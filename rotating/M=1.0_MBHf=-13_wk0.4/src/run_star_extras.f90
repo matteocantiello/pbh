@@ -125,12 +125,10 @@
              nabla_ad = 1 - 1 / gamma1
              c2 = pow(clight, 2)
              
-             M_BH = s% xtra(1) ! black hole mass (g)
-             R_B = 2 * G * M_BH / pow(c_s, 2)         ! Bondi radius (cm)
-             L_Edd = 4*pi * clight * G * M_BH / opacity  ! erg/s
-   
-             j_ISCO = 2d0*sqrt(3d0) * G*M_BH / clight      ! Angular momentum required for circularization around Schwarzschild BH 
-             !k_B = minloc(abs(s%r - R_B), dim=1) ! Find grid position of R_B
+             M_BH = s% xtra(1)                           ! black hole mass (g)
+             R_B = 2 * G * M_BH / pow(c_s, 2)            ! Bondi radius (cm)
+             L_Edd = 4*pi * clight * G * M_BH / opacity  ! Eddingto Luminosity (erg/s)   
+             j_ISCO = 2d0*sqrt(3d0) * G*M_BH / clight    ! Angular momentum required for circularization around Schwarzschild BH (cm^2/s)
 
 
              r_center  = s% r(s% nz)
@@ -165,13 +163,13 @@
 
              j_B_div_j_ISCO = j_B / j_ISCO ! Calculate ratio of j_B and j_ISCO. Here we assume conservation of angular momentum during the infall from R_B -> R_ISCO
    
-             if (j_B_div_j_ISCO < 1 ) then ! No disk, no feedback, full accretion 
+             if (j_B_div_j_ISCO < 1 ) then ! Case of no disk, no feedback, full accretion 
                 write(*,*) 'Bondi Accretion without a disk'
              
                M_dot_BH = 4*pi/sqrt(2d0) *rho* pow(G*M_BH,2) / pow(c_s,3) ! Bondi Accretion Rate 
                M_dot = M_dot_BH                                           ! All mass accreting enters the BH. No energy radiated away 
    
-               L_BH =  0                      ! No feedback 
+               L_BH =  0                                                  ! No feedback 
                L_Bondi = 0     
    
                ! Calculate available mass (use envelope mass directly)
@@ -208,7 +206,7 @@
                   s% max_timestep = timestep_factor * M_BH / M_dot
                endif           
    
-               M_BH_new = M_BH + dm            ! g
+               M_BH_new = M_BH + dm                         ! g
                
                R_B = 2 * G * M_BH_new / pow(c_s, 2)         ! Bondi radius (cm)
                M_cav = 8 * pi / 3 * rho * pow(R_B, 3)       ! mass of cavity (g)
@@ -218,17 +216,17 @@
                core_avg_eps = L_BH / (new_core_mass * Msun) ! average energy generation rate (erg / g s) is zero in the no feedback accretion case
                core_avg_rho = 1 / (4 / 3 * pi) * (new_core_mass * Msun) / pow(R_B, 3) ! average core density (g / cm^3)
              else  
-                write(*,*) 'Disk Accretion'      ! A disk is formed. We need to include feedback and limit accretion rate
+                write(*,*) 'Disk Accretion'                 ! Case of disk formation. We need to include feedback and limit accretion rate
                 M_dot_BH = 16*pi / (rad_eff / (1 - rad_eff)) * con_eff/gamma1/c_s*rho * pow(G*M_BH, 2) / c2 ! g/s This is Bondi limited by convection efficiency 
                 L_Bondi = (rad_eff / (1 - rad_eff)) * M_dot_BH * c2                                         ! erg/s Luminosity associated with accretion (convection limited)
                 L_BH = L_Bondi 
                
                 if (s% x_logical_ctrl(2)) L_BH = min(L_Bondi, L_Edd) ! Limit to Eddington L 
                
-                M_dot = L_BH / (rad_eff * c2)    ! g/s This is the amount of mass that is falling onto the BH (some is lost via radiation)  
+                M_dot = L_BH / (rad_eff * c2)                ! g/s This is the amount of mass that is falling onto the BH (some is lost via radiation)  
    
-                dm = (1 - rad_eff) * M_dot * dt  ! g This is the mass added to the BH each timestep  dm/dt = ((1-rad_eff)/rad_eff) * L_BH/c^2
-                M_BH_new = M_BH + dm             ! g
+                dm = (1 - rad_eff) * M_dot * dt              ! g This is the mass added to the BH each timestep  dm/dt = ((1-rad_eff)/rad_eff) * L_BH/c^2
+                M_BH_new = M_BH + dm                         ! g
                 
                 R_B = 2 * G * M_BH_new / pow(c_s, 2)         ! Bondi radius (cm)
                 M_cav = 8 * pi / 3 * rho * pow(R_B, 3)       ! mass of cavity (g)
@@ -597,7 +595,7 @@
                 write(*,*) 'Save profile at L_BH = 1000 L_star'
                 s%lxtra(22) = .true.
             endif
-            ! Save a profile right before the first episode of disk accretion
+            ! Save a profile at first episode of disk accretion
    
             if (s% xtra(14) >= 0.0 .and. .not. s%lxtra(23)) then 
                s% profile_data_suffix = '_Disk_Formation.data'
@@ -606,65 +604,7 @@
                write(*,*) 'Save profile at First Disk Formation. log (J/Jisco):',  s% xtra(14)
                s%lxtra(23) = .true.
             endif 
-   
-   
-            ! !s% xtra(2) ! L_BH
-            ! if (s%xtra(2) / s%xtra(14) >= 0.001 .and. .not. s%lxtra(16)) then
-            !    ! L_BH = 1/1000 L_star
-            !    s% profile_data_suffix = '_Lbh_div_L_0.001.data'
-            !    s%need_to_save_profiles_now = .true.
-            !    s%need_to_update_history_now = .true.
-            !    write(*,*) 'Save profile at L_BH = 1/1000 L_star'
-            !    s%lxtra(16) = .true.
-            ! else if (s%xtra(2) / s%xtra(14) >= 0.01 .and. .not. s%lxtra(17)) then
-            !    ! L_BH = 1/100 L_star
-            !    s% profile_data_suffix = '_Lbh_div_L_0.01.data'
-            !    s%need_to_save_profiles_now = .true.
-            !    s%need_to_update_history_now = .true.
-            !    write(*,*) 'Save profile at L_BH = 1/100 L_star'
-            !    s%lxtra(17) = .true.
-            ! else if (s%xtra(2) / s%xtra(14) >= 0.1 .and. .not. s%lxtra(18)) then
-            !    ! L_BH = 1/10 L_star
-            !    s% profile_data_suffix = '_Lbh_div_L_0.1.data'
-            !    s%need_to_save_profiles_now = .true.
-            !    s%need_to_update_history_now = .true.
-            !    write(*,*) 'Save profile at L_BH = 1/10 L_star'
-            !    s%lxtra(18) = .true.
-            ! else if (s%xtra(2) / s%xtra(14) >= 1 .and. .not. s%lxtra(19)) then
-            !    ! L_BH = L_star
-            !    s% profile_data_suffix = '_Lbh_div_L_1.data'
-            !    s%need_to_save_profiles_now = .true.
-            !    s%need_to_update_history_now = .true.
-            !    write(*,*) 'Save profile at L_BH = L_star'
-            !    s%lxtra(19) = .true.
-            ! else if (s%xtra(2) / s%xtra(14) >= 10 .and. .not. s%lxtra(20)) then
-            !    ! L_BH = 10 L_star
-            !    s% profile_data_suffix = '_Lbh_div_L_10.data'
-            !    s%need_to_save_profiles_now = .true.
-            !    s%need_to_update_history_now = .true.
-            !    write(*,*) 'Save profile at L_BH = 10 L_star'
-            !    s%lxtra(20) = .true.
-            ! else if (s%xtra(2) / s%xtra(14) >= 100 .and. .not. s%lxtra(21)) then
-            !    ! L_BH = 100 L_star
-            !    s% profile_data_suffix = '_Lbh_div_L_100.data'
-            !    s%need_to_save_profiles_now = .true.
-            !    s%need_to_update_history_now = .true.
-            !    write(*,*) 'Save profile at L_BH = 100 L_star'
-            !    s%lxtra(21) = .true.
-            ! else if (s%xtra(2) / s%xtra(14) >= 1000 .and. .not. s%lxtra(22)) then
-            !    ! L_BH = 1000 L_star
-            !    s% profile_data_suffix = 'Lbh_div_L_1000.data'
-            !    s%need_to_save_profiles_now = .true.
-            !    s%need_to_update_history_now = .true.
-            !    write(*,*) 'Save profile at L_BH = 1000 L_star'
-            !    s%lxtra(22) = .true.
-            ! endif
-            !s% profile_data_suffix = '.data'
-   
-            ! to save a profile, 
-               ! s% need_to_save_profiles_now = .true.
-            ! to update the star log,
-               ! s% need_to_update_history_now = .true.
+
    
             ! see extras_check_model for information about custom termination codes
             ! by default, indicate where (in the code) MESA terminated
