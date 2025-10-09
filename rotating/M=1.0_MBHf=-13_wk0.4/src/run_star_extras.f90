@@ -129,7 +129,7 @@
              R_B = 2 * G * M_BH / pow(c_s, 2)         ! Bondi radius (cm)
              L_Edd = 4*pi * clight * G * M_BH / opacity  ! erg/s
    
-             j_ISCO = 6d0 * G*M_BH / clight      ! Angular momentum required for circularization around Schwarzschild BH 
+             j_ISCO = 2d0*sqrt(3d0) * G*M_BH / clight      ! Angular momentum required for circularization around Schwarzschild BH 
              !k_B = minloc(abs(s%r - R_B), dim=1) ! Find grid position of R_B
 
 
@@ -163,26 +163,9 @@
                 k_B = k_hi
              end if
 
+             j_B_div_j_ISCO = j_B / j_ISCO ! Calculate ratio of j_B and j_ISCO. Here we assume conservation of angular momentum during the infall from R_B -> R_ISCO
    
-            !  if ((k_B >= 1) .and. (k_B <= s%nz)) then
-            !    j_B = s%j_rot(k_B)
-            
-            ! else if (k_B > s%nz) then   ! Bondi radius smaller than inner zone: extrapolate
-            !    k_B = s%nz
-            !    j_B = (2.0_dp/3.0_dp) * s%omega(k_B) * pow(R_B, 2)
-            !    write(*,*) 'Bondi radius smaller than inner zone; j(nz)=', s%j_rot(k_B), &
-            !                ' extrapolated=', (2.0_dp/3.0_dp) * s%omega(k_B) * (R_B**2)
-            
-            ! else                        ! k_B < 1
-            !    k_B = 1
-            !    j_B = s%j_rot(k_B)
-            !    write(*,*) 'Bondi radius larger than star; set R_B = R'
-            
-            ! end if
-
-             j_B_div_j_ISCO = j_B / j_ISCO
-   
-             if (j_B_div_j_ISCO < 1 ) then ! No feedback, full accretion 
+             if (j_B_div_j_ISCO < 1 ) then ! No disk, no feedback, full accretion 
                 write(*,*) 'Bondi Accretion without a disk'
              
                M_dot_BH = 4*pi/sqrt(2d0) *rho* pow(G*M_BH,2) / pow(c_s,3) ! Bondi Accretion Rate 
@@ -235,7 +218,7 @@
                core_avg_eps = L_BH / (new_core_mass * Msun) ! average energy generation rate (erg / g s) is zero in the no feedback accretion case
                core_avg_rho = 1 / (4 / 3 * pi) * (new_core_mass * Msun) / pow(R_B, 3) ! average core density (g / cm^3)
              else  
-                write(*,*) 'Disk Accretion'
+                write(*,*) 'Disk Accretion'      ! A disk is formed. We need to include feedback and limit accretion rate
                 M_dot_BH = 16*pi / (rad_eff / (1 - rad_eff)) * con_eff/gamma1/c_s*rho * pow(G*M_BH, 2) / c2 ! g/s This is Bondi limited by convection efficiency 
                 L_Bondi = (rad_eff / (1 - rad_eff)) * M_dot_BH * c2                                         ! erg/s Luminosity associated with accretion (convection limited)
                 L_BH = L_Bondi 
