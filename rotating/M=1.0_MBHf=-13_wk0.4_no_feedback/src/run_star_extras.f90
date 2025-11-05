@@ -137,7 +137,9 @@
          
             r_center  = s% r(s% nz)
             r_surface = s% r(1)
-                   
+            
+            ! First determine the location of the Bondi Radius
+
             if (R_B <= r_center) then
                ! Bondi radius lies inside the innermost resolved cell (closer to center)
                k_B = s%nz
@@ -163,10 +165,12 @@
                      (R_B - s%r(k_hi)) / (s%r(k_lo) - s%r(k_hi))
                k_B = k_hi
             end if
-         
+            
+            ! Calculate the ratio of the stellar specific angular momentum at R_B and the minimum specific angular momentum required for circularization (j_ISCO)
+
             j_B_div_j_ISCO = j_B / (2d0*sqrt(3d0) * G*M_BH / clight) ! Calculate ratio of j_B and j_ISCO. Here we assume conservation of angular momentum during the infall from R_B -> R_ISCO
             
-            if (j_B_div_j_ISCO < 1 ) then ! Case of no disk, no feedback, full accretion 
+            if (j_B_div_j_ISCO < 1 ) then ! Case of no disk, no feedback, full accretion. We should improve this by allowing for some small amount of feedback 
                write(*,*) 'Bondi Accretion without a disk'
                       
                M_dot_BH = 4*pi/sqrt(2d0) *rho* (G*M_BH)**2 / (c_s**3) ! Bondi Accretion Rate 
@@ -239,7 +243,7 @@
                s% max_timestep = timestep_factor * M_BH / ((1 - rad_eff) * M_dot) ! maximum timestep (s) 
                          
                ! Find ISCO Radius and calculate j_ISCO. Assume this is the specific angular momemtum of accreted material
-               ! --- Kerr ISCO for current (M_BH, J_BH); prograde/retrograde set by sign of j_B ---
+               ! --- Kerr ISCO for current (M_BH, J_BH); prograde/retrograde set by sign of j_B. Here always prograde but easy to change ---
                a_star = clight * J_BH / (G * M_BH * M_BH)
                a_star = max(-0.999999d0, min(0.999999d0, a_star))
          
@@ -306,8 +310,7 @@
                   return
                endif    
                s% xmstar = s% mstar - s% M_center
-               ! TESTING NO FEEDBACK!!
-               ! s% L_center = L_BH
+               s% L_center = L_BH
                call do1_relax_R_center(s, R_B, ierr)
             endif   
                             
