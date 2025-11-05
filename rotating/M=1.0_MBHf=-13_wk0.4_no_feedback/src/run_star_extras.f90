@@ -91,196 +91,351 @@
             logical, intent(in) :: startup
             type (star_info), pointer :: s
             integer, intent(out) :: ierr
-                      
+            
             real(dp) :: G, c2, c_s, rho, gamma1, opacity, dt
             real(dp) :: nabla_ad, P_rad, P_gas
-            real(dp) :: M_BH, M_BH_new, M_cav
-            real(dp) :: M_dot_BH, M_dot, dm, R_B
-            real(dp) :: L_Bondi, L_Edd, L_BH
-            real(dp) :: rad_eff, con_eff, timestep_factor
-            real(dp) :: core_avg_rho, core_avg_eps, new_core_mass
-            real(dp) :: j_ISCO, j_B, j_B_div_j_ISCO, dj, J_BH_new, J_BH
-            real(dp) :: max_accretion_fraction, available_mass, max_dm
-            real(dp) :: r_center, r_surface 
-            integer :: k_B, k_lo, k_hi
-         
-            ! --- NEW: locals for Kerr ISCO & spin update ---
-            real(dp) :: a_star, Z1, Z2, r_tilde, sqrt_r, den, L_tilde
-            real(dp) :: R_ISCO, j_acc
-         
+            real(dp) :: M_BH, M_BH_new, J_BH, J_BH_new
+            real(dp) :: M_dot, dm, R_B, L_BH, new_core_mass, core_avg_rho, core_avg_eps
+            real(dp) :: j_B, j_B_div_j_ISCO, j_ISCO_ref
+            real(dp) :: rad_eff, con_eff, timestep_factor, max_accretion_fraction
+            
             ierr = 0
+            
+            ! Get control parameters and physical quantities
+            call get_control_parameters(s, rad_eff, con_eff, timestep_factor, max_accretion_fraction)
+            call get_physical_quantities(s, dt, G, c_s, rho, opacity, P_rad, P_gas, gamma1, nabla_ad)
+            
+            ! Get black hole properties
+            M_BH = s% xtra(1)
+            J_BH = s% xtra(15)
+            c2 = clight**2
+            
+            ! Calculate Bondi radius and reference j_ISCO
+            R_B = compute_bondi_radius(G, M_BH, c_s)
+            j_ISCO_ref = compute_schwarzschild_j_ISCO(G, M_BH)
+            
+            ! Find angular momentum at Bondi radius
+            call find_j_at_bondi_radius(s, R_B, j_B)
+            
+            ! Determine accretion regime
+            j_B_div_j_ISCO = j_B / j_ISCO_ref
+            
+            if (j_B_div_j_ISCO < 1.0_dp) then
+               ! Bondi accretion without disk
+               call bondi_accretion_no_disk(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, dt, &
+                                            timestep_factor, max_accretion_fraction, &
+                                            M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
+            else
+               ! Disk accretion with feedback
+               call disk_accretion_with_feedback(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, gamma1, dt, &
+                                                 rad_eff, con_eff, timestep_factor, &
+                                                 M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B)
+            endif
+            
+            if (ierr /= 0) return
+            
+            ! Update stellar structure
+            call update_stellar_structure(s, id, startup, M_BH_new, J_BH_new, L_BH, R_B, M_dot, &
+                                          rad_eff, dt, rho, ierr)
+            
+            ! Store diagnostic quantities
+            call store_diagnostics(s, M_BH_new, J_BH_new, L_BH, R_B, M_dot, dm, dt, &
+                                  rad_eff, opacity, P_rad, P_gas, nabla_ad, j_B_div_j_ISCO)
+            
+            ! Print summary
+            call print_bh_summary(s, M_BH_new, L_BH, M_dot, rad_eff, j_B_div_j_ISCO)
+            
+         end subroutine black_hole_accretion
          
-            rad_eff = s% x_ctrl(1) ! epsilon 
-            con_eff = s% x_ctrl(2) ! eta 
+         
+         subroutine get_control_parameters(s, rad_eff, con_eff, timestep_factor, max_accretion_fraction)
+            type (star_info), pointer :: s
+            real(dp), intent(out) :: rad_eff, con_eff, timestep_factor, max_accretion_fraction
+            
+            rad_eff = s% x_ctrl(1)  ! epsilon - radiative efficiency
+            con_eff = s% x_ctrl(2)  ! eta - convection efficiency
             timestep_factor = s% x_ctrl(3)
-            max_accretion_fraction = s% x_ctrl(5) ! Maximum fraction of star mass to accrete per timestep (e.g., 0.01 for 1%)
-                      
+            max_accretion_fraction = s% x_ctrl(5)
+            
             ! Set default if not specified
             if (max_accretion_fraction <= 0d0) max_accretion_fraction = 0.01d0
-                      
-            dt      = s% dt             ! time step              (s)
-            G       = s% cgrav(s% nz)   ! gravitational constant (cm^3 / g s^2)
-            c_s     = s% csound(s% nz)  ! speed of sound         (cm / s)
-            rho     = s% rho(s% nz)     ! density                (g / cm^3)
-            opacity = s% opacity(s% nz) ! opacity                (cm^2 / g)
-            P_rad   = s% prad(s% nz)    ! radiation pressure     (dyn / cm^2)
-            P_gas   = s% pgas(s% nz)    ! gas pressure           (dyn / cm^2)
-            gamma1  = s% gamma1(s% nz)  ! adiabatic index
-            nabla_ad = 1 - 1 / gamma1
-            c2 = clight**2
-                      
-            M_BH = s% xtra(1)                           ! black hole mass (g)
-            J_BH = s% xtra(15)                          ! black hole angular momentum (cm^2 / s)  [NOTE: initialized elsewhere]
-            R_B  = 2 * G * M_BH / (c_s*c_s)             ! Bondi radius (cm)
-            L_Edd = 4*pi * clight * G * M_BH / opacity  ! Eddington Luminosity (erg/s)   
-            j_ISCO = 2d0*sqrt(3d0) * G*M_BH / clight    ! Schwarzschild reference j_ISCO (cm^2/s) for diagnostics/gating
+            
+         end subroutine get_control_parameters
          
-            r_center  = s% r(s% nz)
+         
+         subroutine get_physical_quantities(s, dt, G, c_s, rho, opacity, P_rad, P_gas, gamma1, nabla_ad)
+            type (star_info), pointer :: s
+            real(dp), intent(out) :: dt, G, c_s, rho, opacity, P_rad, P_gas, gamma1, nabla_ad
+            
+            dt      = s% dt
+            G       = s% cgrav(s% nz)
+            c_s     = s% csound(s% nz)
+            rho     = s% rho(s% nz)
+            opacity = s% opacity(s% nz)
+            P_rad   = s% prad(s% nz)
+            P_gas   = s% pgas(s% nz)
+            gamma1  = s% gamma1(s% nz)
+            nabla_ad = 1d0 - 1d0 / gamma1
+            
+         end subroutine get_physical_quantities
+         
+         
+         function compute_bondi_radius(G, M_BH, c_s) result(R_B)
+            real(dp), intent(in) :: G, M_BH, c_s
+            real(dp) :: R_B
+            
+            R_B = 2d0 * G * M_BH / (c_s * c_s)
+            
+         end function compute_bondi_radius
+         
+         
+         function compute_schwarzschild_j_ISCO(G, M_BH) result(j_ISCO)
+            real(dp), intent(in) :: G, M_BH
+            real(dp) :: j_ISCO
+            
+            j_ISCO = 2d0 * sqrt(3d0) * G * M_BH / clight
+            
+         end function compute_schwarzschild_j_ISCO
+         
+         
+         subroutine find_j_at_bondi_radius(s, R_B, j_B)
+            type (star_info), pointer :: s
+            real(dp), intent(in) :: R_B
+            real(dp), intent(out) :: j_B
+            
+            real(dp) :: r_center, r_surface
+            integer :: k_B, k_lo, k_hi
+            
+            r_center = s% r(s% nz)
             r_surface = s% r(1)
             
-            ! First determine the location of the Bondi Radius
-
             if (R_B <= r_center) then
-               ! Bondi radius lies inside the innermost resolved cell (closer to center)
-               k_B = s%nz
-               j_B = (2.0_dp/3.0_dp) * s%omega(k_B) * (R_B**2)
+               ! Bondi radius inside innermost cell - extrapolate
+               k_B = s% nz
+               j_B = (2.0_dp/3.0_dp) * s% omega(k_B) * (R_B**2)
                write(*,*) 'Bondi radius inside inner cell; extrapolated j_B from omega(nz).'
-                   
+               
             else if (R_B >= r_surface) then
-               ! Bondi radius outside the star: clamp to surface value
+               ! Bondi radius outside star - use surface value
                k_B = 1
-               j_B = s%j_rot(k_B)
+               j_B = s% j_rot(k_B)
                write(*,*) 'Bondi radius larger than star; using j at surface.'
-                   
+               
             else
-               ! R_B lies within the stellar model; find enclosing radii
-               do k_hi = s%nz-1, 1, -1
-                  if ((s%r(k_hi) >= R_B) .and. (R_B >= s%r(k_hi+1))) then
+               ! R_B within stellar model - interpolate
+               do k_hi = s% nz - 1, 1, -1
+                  if ((s% r(k_hi) >= R_B) .and. (R_B >= s% r(k_hi+1))) then
                      k_lo = k_hi + 1
                      exit
                   end if
                end do
-               ! Linear interpolation in (r, j_rot)
-               j_B = s%j_rot(k_hi) + (s%j_rot(k_lo) - s%j_rot(k_hi)) * &
-                     (R_B - s%r(k_hi)) / (s%r(k_lo) - s%r(k_hi))
-               k_B = k_hi
+               
+               ! Linear interpolation
+               j_B = s% j_rot(k_hi) + (s% j_rot(k_lo) - s% j_rot(k_hi)) * &
+                     (R_B - s% r(k_hi)) / (s% r(k_lo) - s% r(k_hi))
             end if
             
-            ! Calculate the ratio of the stellar specific angular momentum at R_B and the minimum specific angular momentum required for circularization (j_ISCO)
-
-            j_B_div_j_ISCO = j_B / (2d0*sqrt(3d0) * G*M_BH / clight) ! Calculate ratio of j_B and j_ISCO. Here we assume conservation of angular momentum during the infall from R_B -> R_ISCO
+         end subroutine find_j_at_bondi_radius
+         
+         
+         subroutine compute_kerr_ISCO(M_BH, J_BH, j_B, G, R_ISCO, j_ISCO)
+            real(dp), intent(in) :: M_BH, J_BH, j_B, G
+            real(dp), intent(out) :: R_ISCO, j_ISCO
             
-            if (j_B_div_j_ISCO < 1 ) then ! Case of no disk, no feedback, full accretion. We should improve this by allowing for some small amount of feedback 
-               write(*,*) 'Bondi Accretion without a disk'
-                      
-               M_dot_BH = 4*pi/sqrt(2d0) *rho* (G*M_BH)**2 / (c_s**3) ! Bondi Accretion Rate 
-               M_dot = M_dot_BH                                       ! All mass accreting enters the BH. No energy radiated away 
+            real(dp) :: a_star, Z1, Z2, r_tilde, sqrt_r, den, L_tilde
             
-               L_BH =  0                                              ! No feedback 
-               L_Bondi = 0     
+            ! Dimensionless spin parameter
+            a_star = clight * J_BH / (G * M_BH * M_BH)
+            a_star = max(-0.999999d0, min(0.999999d0, a_star))
             
-               ! Calculate available mass (use envelope mass directly)
-               ! s% xmstar is already s% mstar - s% M_center (in grams)
-               available_mass = s% xmstar 
-                        
-               ! Sanity check
-               if (available_mass <= 0d0) then
-                  write(*,*) 'ERROR: No available envelope mass for accretion'
-                  write(*,*) 's% xmstar (envelope mass in g):', available_mass
-                  write(*,*) 's% mstar (total mass in g):', s% mstar
-                  write(*,*) 's% M_center (core mass in Msun):', s% M_center/Msun
-                  ierr = -1
+            ! Bardeen-Petterson ISCO calculation
+            Z1 = 1d0 + (1d0 - a_star*a_star)**(1d0/3d0) * &
+                 ((1d0 + a_star)**(1d0/3d0) + (1d0 - a_star)**(1d0/3d0))
+            Z2 = sqrt(3d0 * a_star * a_star + Z1 * Z1)
+            
+            if (j_B >= 0d0) then
+               ! Prograde ISCO
+               r_tilde = 3d0 + Z2 - sqrt((3d0 - Z1) * (3d0 + Z1 + 2d0*Z2))
+            else
+               ! Retrograde ISCO
+               r_tilde = 3d0 + Z2 + sqrt((3d0 - Z1) * (3d0 + Z1 + 2d0*Z2))
+            end if
+            r_tilde = max(r_tilde, 1d0)
+            
+            ! Specific angular momentum at ISCO
+            sqrt_r = sqrt(r_tilde)
+            den = sqrt(max(1d-30, r_tilde*r_tilde - 3d0*r_tilde + 2d0*a_star*sign(1d0, j_B)*sqrt_r))
+            L_tilde = (r_tilde*r_tilde - 2d0*a_star*sign(1d0, j_B)*sqrt_r + a_star*a_star) / den
+            
+            R_ISCO = r_tilde * G * M_BH / (clight * clight)
+            j_ISCO = L_tilde * G * M_BH / clight
+            
+         end subroutine compute_kerr_ISCO
+         
+         
+         subroutine bondi_accretion_no_disk(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, dt, &
+                                            timestep_factor, max_accretion_fraction, &
+                                            M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
+            type (star_info), pointer :: s
+            real(dp), intent(in) :: M_BH, J_BH, j_B, G, c_s, rho, opacity, dt
+            real(dp), intent(in) :: timestep_factor, max_accretion_fraction
+            real(dp), intent(out) :: M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B
+            integer, intent(out) :: ierr
+            
+            real(dp) :: M_dot_BH, available_mass, max_dm, j_acc, dj
+            
+            ierr = 0
+            write(*,*) 'Bondi Accretion without a disk'
+            
+            ! Bondi accretion rate
+            M_dot_BH = 4d0 * pi / sqrt(2d0) * rho * (G * M_BH)**2 / (c_s**3)
+            M_dot = M_dot_BH
+            L_BH = 0d0  ! No feedback
+            
+            ! Check available mass
+            available_mass = s% xmstar
+            if (available_mass <= 0d0) then
+               write(*,*) 'ERROR: No available envelope mass for accretion'
+               write(*,*) 's% xmstar (envelope mass in g):', available_mass
+               write(*,*) 's% mstar (total mass in g):', s% mstar
+               write(*,*) 's% M_center (core mass in Msun):', s% M_center / Msun
+               ierr = -1
+               return
+            endif
+            
+            ! Limit accretion by available mass
+            max_dm = max_accretion_fraction * available_mass
+            dm = min(M_dot * dt, max_dm)
+            
+            if (M_dot * dt > max_dm) then
+               write(*,*) 'WARNING: Accretion limited by available mass'
+               write(*,*) 'Requested dm/Msun:', M_dot * dt / Msun
+               write(*,*) 'Available envelope mass/Msun:', available_mass / Msun
+               write(*,*) 'Actual dm/Msun:', dm / Msun
+               M_dot = dm / dt
+               s% max_timestep = timestep_factor * max_dm / M_dot
+            else
+               s% max_timestep = timestep_factor * M_BH / M_dot
+            endif
+            
+            ! Update black hole properties (spherical inflow uses local j_B)
+            j_acc = j_B
+            M_BH_new = M_BH + dm
+            dj = dm * j_acc
+            J_BH_new = J_BH + dj
+            
+            ! Update Bondi radius with new BH mass
+            R_B = compute_bondi_radius(G, M_BH_new, c_s)
+            
+         end subroutine bondi_accretion_no_disk
+         
+         
+         subroutine disk_accretion_with_feedback(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, gamma1, dt, &
+                                                 rad_eff, con_eff, timestep_factor, &
+                                                 M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B)
+            type (star_info), pointer :: s
+            real(dp), intent(in) :: M_BH, J_BH, j_B, G, c_s, rho, opacity, gamma1, dt
+            real(dp), intent(in) :: rad_eff, con_eff, timestep_factor
+            real(dp), intent(out) :: M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B
+            
+            real(dp) :: c2, M_dot_BH, L_Bondi, L_Edd, R_ISCO, j_ISCO, j_acc, dj
+            
+            write(*,*) 'Disk Accretion'
+            c2 = clight**2
+            
+            ! Accretion rate limited by convection
+            M_dot_BH = 16d0 * pi / (rad_eff / (1d0 - rad_eff)) * con_eff / gamma1 / c_s * &
+                       rho * (G * M_BH)**2 / c2
+            L_Bondi = (rad_eff / (1d0 - rad_eff)) * M_dot_BH * c2
+            
+            ! Eddington limit (optional)
+            L_Edd = 4d0 * pi * clight * G * M_BH / opacity
+            if (s% x_logical_ctrl(2)) then
+               L_BH = min(L_Bondi, L_Edd)
+            else
+               L_BH = L_Bondi
+            endif
+            
+            ! Actual mass accretion onto BH
+            M_dot = L_BH / (rad_eff * c2)
+            dm = (1d0 - rad_eff) * M_dot * dt
+            s% max_timestep = timestep_factor * M_BH / ((1d0 - rad_eff) * M_dot)
+            
+            ! Compute Kerr ISCO properties
+            call compute_kerr_ISCO(M_BH, J_BH, j_B, G, R_ISCO, j_ISCO)
+            
+            ! Accretion occurs at ISCO
+            j_acc = sign(1d0, j_B) * abs(j_ISCO)
+            
+            ! Update black hole properties
+            M_BH_new = M_BH + dm
+            dj = dm * j_acc
+            J_BH_new = J_BH + dj
+            
+            ! Update Bondi radius with new BH mass
+            R_B = compute_bondi_radius(G, M_BH_new, c_s)
+            
+         end subroutine disk_accretion_with_feedback
+         
+         
+         subroutine update_stellar_structure(s, id, startup, M_BH_new, J_BH_new, L_BH, R_B, M_dot, &
+                                             rad_eff, dt, rho, ierr)
+            type (star_info), pointer :: s
+            integer, intent(in) :: id
+            logical, intent(in) :: startup
+            real(dp), intent(in) :: M_BH_new, J_BH_new, L_BH, R_B, M_dot, rad_eff, dt, rho
+            integer, intent(out) :: ierr
+            
+            real(dp) :: M_cav, new_core_mass, core_avg_rho, core_avg_eps
+            
+            ! Calculate cavity mass and new core mass
+            M_cav = 8d0 * pi / 3d0 * rho * (R_B**3)
+            new_core_mass = (M_BH_new + M_cav) / Msun
+            
+            ! Average core properties
+            core_avg_eps = L_BH / (new_core_mass * Msun)
+            core_avg_rho = 1d0 / (4d0 / 3d0 * pi) * (new_core_mass * Msun) / (R_B**3)
+            
+            if (startup) then
+               ! Relax core during startup
+               call star_relax_core( &
+                    id, new_core_mass, s% job% dlg_core_mass_per_step, &
+                    s% job% relax_core_years_for_dt, &
+                    core_avg_rho, core_avg_eps, ierr)
+            else
+               ! Update stellar properties
+               s% M_center = new_core_mass * Msun
+               s% mstar = s% mstar - rad_eff * M_dot * dt
+               
+               if (s% mstar - s% M_center < 0d0) then
+                  write(*,*) 'M_Center > M_Star: Stopping Calculation'
                   return
                endif
-                        
-               ! Maximum mass that can be accreted this timestep
-               max_dm = max_accretion_fraction * available_mass
-                        
-               ! Actual accreted mass (limited by available mass)
-               dm = min(M_dot * dt, max_dm)
-                        
-               ! Check if we're limiting the accretion
-               if (M_dot * dt > max_dm) then
-                  write(*,*) 'WARNING: Accretion limited by available mass'
-                  write(*,*) 'Requested dm/Msun:', M_dot * dt / Msun
-                  write(*,*) 'Available envelope mass/Msun:', available_mass / Msun
-                  write(*,*) 'Actual dm/Msun:', dm / Msun
-                  ! Update M_dot to the actual limited rate
-                  M_dot = dm / dt
-                  ! Adjust timestep for next iteration
-                  s% max_timestep = timestep_factor * max_dm / M_dot
-               else
-                  s% max_timestep = timestep_factor * M_BH / M_dot
-               endif           
+               
+               s% xmstar = s% mstar - s% M_center
+               s% L_center = L_BH
+               call do1_relax_R_center(s, R_B, ierr)
+            endif
             
-               ! Spherical inflow: use local j_B for angular momentum accreted
-               j_acc = j_B
+         end subroutine update_stellar_structure
          
-               ! Update BH Mass and Angular momentum 
-               M_BH_new = M_BH + dm                         ! g
-               dj = dm * j_acc
-               J_BH_new = J_BH + dj 
          
-               ! Recompute Bondi geometry with updated BH mass
-               R_B = 2 * G * M_BH_new / (c_s*c_s)          ! Bondi radius (cm)
-               M_cav = 8 * pi / 3 * rho * (R_B**3)         ! mass of cavity (g)
-               new_core_mass = (M_BH_new + M_cav) / Msun   ! new core mass (Msun)
+         subroutine store_diagnostics(s, M_BH_new, J_BH_new, L_BH, R_B, M_dot, dm, dt, &
+                                      rad_eff, opacity, P_rad, P_gas, nabla_ad, j_B_div_j_ISCO)
+            type (star_info), pointer :: s
+            real(dp), intent(in) :: M_BH_new, J_BH_new, L_BH, R_B, M_dot, dm, dt
+            real(dp), intent(in) :: rad_eff, opacity, P_rad, P_gas, nabla_ad, j_B_div_j_ISCO
             
-               core_avg_eps = L_BH / (new_core_mass * Msun) ! average energy generation rate (erg / g s) is zero in the no feedback accretion case
-               core_avg_rho = 1 / (4 / 3 * pi) * (new_core_mass * Msun) / (R_B**3) ! average core density (g / cm^3)
-         
-            else  
-               write(*,*) 'Disk Accretion'                 ! Case of disk formation. We need to include feedback and limit accretion rate
-         
-               M_dot_BH = 16*pi / (rad_eff / (1 - rad_eff)) * con_eff/gamma1/c_s*rho * (G*M_BH)**2 / c2 ! g/s This is Bondi limited by convection efficiency 
-               L_Bondi = (rad_eff / (1 - rad_eff)) * M_dot_BH * c2                                        ! erg/s Luminosity associated with accretion (convection limited)
-               L_BH = L_Bondi 
-                        
-               if (s% x_logical_ctrl(2)) L_BH = min(L_Bondi, L_Edd) ! Limit to Eddington L 
-                        
-               M_dot = L_BH / (rad_eff * c2)                ! g/s This is the amount of mass that is falling onto the BH (some is lost via radiation)  
-               dm = (1 - rad_eff) * M_dot * dt              ! g This is the mass added to the BH each timestep  dm/dt = ((1-rad_eff)/rad_eff) * L_BH/c^2
-               s% max_timestep = timestep_factor * M_BH / ((1 - rad_eff) * M_dot) ! maximum timestep (s) 
-                         
-               ! Find ISCO Radius and calculate j_ISCO. Assume this is the specific angular momemtum of accreted material
-               ! --- Kerr ISCO for current (M_BH, J_BH); prograde/retrograde set by sign of j_B. Here always prograde but easy to change ---
-               a_star = clight * J_BH / (G * M_BH * M_BH)
-               a_star = max(-0.999999d0, min(0.999999d0, a_star))
-         
-               Z1 = 1d0 + (1d0 - a_star*a_star)**(1d0/3d0) * ( (1d0 + a_star)**(1d0/3d0) + (1d0 - a_star)**(1d0/3d0) )
-               Z2 = sqrt(3d0*a_star*a_star + Z1*Z1)
-         
-               if (j_B >= 0d0) then
-                  ! prograde ISCO
-                  r_tilde = 3d0 + Z2 - sqrt( (3d0 - Z1) * (3d0 + Z1 + 2d0*Z2) )
-               else
-                  ! retrograde ISCO
-                  r_tilde = 3d0 + Z2 + sqrt( (3d0 - Z1) * (3d0 + Z1 + 2d0*Z2) )
-               end if
-               r_tilde = max(r_tilde, 1d0)
-         
-               sqrt_r = sqrt(r_tilde)
-               den    = sqrt( max(1d-30, r_tilde*r_tilde - 3d0*r_tilde + 2d0*a_star*sign(1d0, j_B)*sqrt_r) )
-               L_tilde = ( r_tilde*r_tilde - 2d0*a_star*sign(1d0, j_B)*sqrt_r + a_star*a_star ) / den
-         
-               R_ISCO = r_tilde * G * M_BH / (clight*clight)   ! cm
-               j_ISCO = L_tilde * G * M_BH / clight            ! cm^2/s
-         
-               j_B = j_ISCO                                    ! keep your variable naming/comment
-               j_acc = sign(1d0, j_B) * abs(j_ISCO)            ! specific angular momentum of accreted material (at ISCO)
-         
-               ! Update BH Mass and Angular momentum 
-               M_BH_new = M_BH + dm
-               dj = dm * j_acc
-               J_BH_new = J_BH + dj 
-                         
-               R_B = 2 * G * M_BH_new / (c_s*c_s)             ! Bondi radius (cm)
-               M_cav = 8 * pi / 3 * rho * (R_B**3)            ! mass of cavity (g)
-               new_core_mass = (M_BH_new + M_cav) / Msun      ! new core mass (Msun)
-               core_avg_eps = L_BH / (new_core_mass * Msun)   ! average energy generation rate (erg / g s)
-               core_avg_rho = 1 / (4 / 3 * pi) * (new_core_mass * Msun) / (R_B**3) ! average core density (g / cm^3)
-            endif  
-                     
+            real(dp) :: c2, L_Bondi, L_Edd, M_cav, rho
+            
+            rho = s% rho(s% nz)
+            c2 = clight**2
+            
+            ! Recompute some diagnostic quantities
+            L_Bondi = (rad_eff / (1d0 - rad_eff)) * M_dot * c2
+            L_Edd = 4d0 * pi * clight * s% cgrav(s% nz) * M_BH_new / opacity
+            M_cav = 8d0 * pi / 3d0 * rho * (R_B**3)
+            
             s% xtra(1)  = M_BH_new
             s% xtra(2)  = L_BH
             s% xtra(3)  = R_B
@@ -295,37 +450,30 @@
             s% xtra(12) = P_gas
             s% xtra(13) = nabla_ad
             s% xtra(14) = safe_log10(j_B_div_j_ISCO)
-            s% xtra(15) = J_BH_new                               ! store updated BH angular momentum   
-                      
-            if (startup) then
-               call star_relax_core( &
-                    id, new_core_mass, s% job% dlg_core_mass_per_step, &
-                    s% job% relax_core_years_for_dt, &
-                    core_avg_rho, core_avg_eps, ierr)
-            else
-               s% M_center = new_core_mass * Msun  ! Use grams version for now
-               s% mstar = s% mstar - rad_eff * M_dot * dt
-               if (s% mstar - s% M_center < 0) then 
-                  write(*,*) 'M_Center > M_Star: Stopping Calculation'
-                  return
-               endif    
-               s% xmstar = s% mstar - s% M_center
-               s% L_center = L_BH
-               call do1_relax_R_center(s, R_B, ierr)
-            endif   
-                            
-            print*, '--- Black Hole Properties ---'
-            print*, 'M/M_sun: ',    s% mstar / Msun
-            print*, 'M_BH/M_sun: ', M_BH_new / Msun
-            print*, 'L_BH/L_sun: ', L_BH / Lsun
-            print*, 'new_core_mass/M_sun: ', new_core_mass
-            print*, 'M_dot (M_sun/yr):',M_dot/Msun*secyer
-            print*, 'radiative efficiency: ', rad_eff
-            print*, 'log (j_Bondi / j_ISCO)', s% xtra(14)
-            print*, '-----------------------------'
-                      
-         end subroutine black_hole_accretion
+            s% xtra(15) = J_BH_new
+            
+         end subroutine store_diagnostics
          
+         
+         subroutine print_bh_summary(s, M_BH_new, L_BH, M_dot, rad_eff, j_B_div_j_ISCO)
+            type (star_info), pointer :: s
+            real(dp), intent(in) :: M_BH_new, L_BH, M_dot, rad_eff, j_B_div_j_ISCO
+            
+            real(dp) :: new_core_mass
+            
+            new_core_mass = s% M_center / Msun
+            
+            print*, '--- Black Hole Properties ---'
+            print*, 'M/M_sun: ',              s% mstar / Msun
+            print*, 'M_BH/M_sun: ',           M_BH_new / Msun
+            print*, 'L_BH/L_sun: ',           L_BH / Lsun
+            print*, 'new_core_mass/M_sun: ',  new_core_mass
+            print*, 'M_dot (M_sun/yr):',      M_dot / Msun * secyer
+            print*, 'radiative efficiency: ', rad_eff
+            print*, 'log (j_Bondi / j_ISCO)', safe_log10(j_B_div_j_ISCO)
+            print*, '-----------------------------'
+            
+         end subroutine print_bh_summary
          
          
          subroutine extras_startup(id, restart, ierr)

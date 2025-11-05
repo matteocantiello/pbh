@@ -71,8 +71,8 @@
          !Profile_Panels2_other_ymax(1) = -101d0 ! only used if /= -101d0
          !Profile_Panels2_xaxis_log = .true.
 
-         Profile_Panels2_xmin = -3
-         Profile_Panels2_xmax = -1
+         !Profile_Panels2_xmin = -3
+         !Profile_Panels2_xmax = -1
 
          Profile_Panels2_yaxis_log(1) = .true.
          Profile_Panels2_other_yaxis_log(1) = .true.
