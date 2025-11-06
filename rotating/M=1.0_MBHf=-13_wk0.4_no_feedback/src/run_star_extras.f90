@@ -98,8 +98,11 @@
             real(dp) :: M_dot, dm, R_B, L_BH, new_core_mass, core_avg_rho, core_avg_eps
             real(dp) :: j_B, j_B_div_j_ISCO, j_ISCO_ref
             real(dp) :: rad_eff, con_eff, timestep_factor, max_accretion_fraction
-            
+            real(dp) :: transition_width
+   
             ierr = 0
+            transition_width = 0.5d0 ! Set default transition width
+            
             
             ! Get control parameters and physical quantities
             call get_control_parameters(s, rad_eff, con_eff, timestep_factor, max_accretion_fraction)
@@ -116,23 +119,35 @@
             
             ! Find angular momentum at Bondi radius
             call find_j_at_bondi_radius(s, R_B, j_B)
+
             
             ! Determine accretion regime
             j_B_div_j_ISCO = j_B / j_ISCO_ref
-            
-            if (j_B_div_j_ISCO < 1.0_dp) then
-               ! Bondi accretion without disk
-               call bondi_accretion_no_disk(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, dt, &
-                                            timestep_factor, max_accretion_fraction, &
-                                            M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
-            else
-               ! Disk accretion with feedback
-               call disk_accretion_with_feedback(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, gamma1, dt, &
-                                                 rad_eff, con_eff, timestep_factor, &
-                                                 M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B)
-            endif
-            
+
+
+
+            ! Use smooth blending between the two regimes
+            call smooth_accretion_transition(s, M_BH, J_BH, j_B, j_B_div_j_ISCO, &
+               G, c_s, rho, opacity, gamma1, dt, &
+               rad_eff, con_eff, timestep_factor, &
+               max_accretion_fraction, transition_width, &
+               M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
+
             if (ierr /= 0) return
+            
+            ! if (j_B_div_j_ISCO < 1.0_dp) then
+            !    ! Bondi accretion without disk
+            !    call bondi_accretion_no_disk(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, dt, &
+            !                                 timestep_factor, max_accretion_fraction, &
+            !                                 M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
+            ! else
+            !    ! Disk accretion with feedback
+            !    call disk_accretion_with_feedback(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, gamma1, dt, &
+            !                                      rad_eff, con_eff, timestep_factor, &
+            !                                      M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B)
+            ! endif
+            
+            ! if (ierr /= 0) return
             
             ! Update stellar structure
             call update_stellar_structure(s, id, startup, M_BH_new, J_BH_new, L_BH, R_B, M_dot, &
@@ -285,7 +300,7 @@
             real(dp) :: M_dot_BH, available_mass, max_dm, j_acc, dj
             
             ierr = 0
-            write(*,*) 'Bondi Accretion without a disk'
+            !write(*,*) 'Bondi Accretion without a disk'
             
             ! Bondi accretion rate
             M_dot_BH = 4d0 * pi / sqrt(2d0) * rho * (G * M_BH)**2 / (c_s**3)
@@ -340,7 +355,7 @@
             
             real(dp) :: c2, M_dot_BH, L_Bondi, L_Edd, R_ISCO, j_ISCO, j_acc, dj
             
-            write(*,*) 'Disk Accretion'
+            ! write(*,*) 'Disk Accretion'
             c2 = clight**2
             
             ! Accretion rate limited by convection
@@ -377,6 +392,110 @@
             
          end subroutine disk_accretion_with_feedback
          
+
+         function smoothstep(x, x_min, x_max) result(f)
+            ! Smooth interpolation function (Hermite cubic)
+            ! Returns 0 for x <= x_min, 1 for x >= x_max, smooth transition in between
+            real(dp), intent(in) :: x, x_min, x_max
+            real(dp) :: f, t
+            
+            if (x <= x_min) then
+               f = 0d0
+            else if (x >= x_max) then
+               f = 1d0
+            else
+               t = (x - x_min) / (x_max - x_min)
+               f = t * t * (3d0 - 2d0 * t)  ! 3t^2 - 2t^3
+            endif
+            
+         end function smoothstep
+
+
+         subroutine smooth_accretion_transition(s, M_BH, J_BH, j_B, j_B_div_j_ISCO, &
+                                                G, c_s, rho, opacity, gamma1, dt, &
+                                                rad_eff, con_eff, timestep_factor, &
+                                                max_accretion_fraction, transition_width, &
+                                                M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
+            type (star_info), pointer :: s
+            real(dp), intent(in) :: M_BH, J_BH, j_B, j_B_div_j_ISCO
+            real(dp), intent(in) :: G, c_s, rho, opacity, gamma1, dt
+            real(dp), intent(in) :: rad_eff, con_eff, timestep_factor, max_accretion_fraction
+            real(dp), intent(inout) :: transition_width
+            real(dp), intent(out) :: M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B
+            integer, intent(out) :: ierr
+            
+            ! Variables for Bondi regime (no disk)
+            real(dp) :: M_dot_bondi, dm_bondi, L_BH_bondi, M_BH_new_bondi, J_BH_new_bondi, R_B_bondi
+            
+            ! Variables for disk regime (with feedback)
+            real(dp) :: M_dot_disk, dm_disk, L_BH_disk, M_BH_new_disk, J_BH_new_disk, R_B_disk
+            
+            ! Blending variables
+            real(dp) :: alpha, j_min, j_max
+            integer :: ierr_bondi
+            
+            ierr = 0
+            
+            ! Define transition region
+            ! Default: transition from 0.5 to 1.5 in j_B/j_ISCO
+            if (transition_width <= 0d0) transition_width = 0.5d0
+            j_min = 1d0 - transition_width
+            j_max = 1d0 + transition_width
+            
+            ! Compute blending factor (0 = pure Bondi, 1 = pure disk)
+            alpha = smoothstep(j_B_div_j_ISCO, j_min, j_max)
+            
+            ! Compute both accretion regimes
+            call bondi_accretion_no_disk(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, dt, &
+                                       timestep_factor, max_accretion_fraction, &
+                                       M_BH_new_bondi, J_BH_new_bondi, M_dot_bondi, &
+                                       dm_bondi, L_BH_bondi, R_B_bondi, ierr_bondi)
+            
+            if (ierr_bondi /= 0) then
+               ierr = ierr_bondi
+               return
+            endif
+            
+            call disk_accretion_with_feedback(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, gamma1, dt, &
+                                             rad_eff, con_eff, timestep_factor, &
+                                             M_BH_new_disk, J_BH_new_disk, M_dot_disk, &
+                                             dm_disk, L_BH_disk, R_B_disk)
+            
+            ! Blend the results
+            M_dot   = (1d0 - alpha) * M_dot_bondi   + alpha * M_dot_disk
+            dm      = (1d0 - alpha) * dm_bondi      + alpha * dm_disk
+            L_BH    = (1d0 - alpha) * L_BH_bondi    + alpha * L_BH_disk
+            R_B     = (1d0 - alpha) * R_B_bondi     + alpha * R_B_disk
+            
+            ! For BH properties, use dm-weighted average to conserve mass/angular momentum
+            M_BH_new = M_BH + dm
+            
+            ! Blend angular momentum update
+            J_BH_new = (1d0 - alpha) * J_BH_new_bondi + alpha * J_BH_new_disk
+            
+            ! Set timestep appropriately
+            if (alpha < 0.5d0) then
+               ! More Bondi-like
+               s% max_timestep = timestep_factor * M_BH / max(M_dot_bondi, 1d-99)
+            else
+               ! More disk-like
+               s% max_timestep = timestep_factor * M_BH / ((1d0 - rad_eff) * max(M_dot_disk, 1d-99))
+            endif
+            
+            ! Print transition information
+            if (alpha > 0d0 .and. alpha < 1d0) then
+               write(*,*) 'SMOOTH TRANSITION MODE'
+               write(*,*) '  j_B/j_ISCO = ', j_B_div_j_ISCO
+               write(*,*) '  Blending factor (alpha) = ', alpha
+               write(*,*) '  Bondi weight = ', 1d0 - alpha
+               write(*,*) '  Disk weight = ', alpha
+            else if (alpha == 0d0) then
+               write(*,*) 'Pure Bondi Accretion (no disk)'
+            else
+               write(*,*) 'Pure Disk Accretion'
+            endif
+            
+         end subroutine smooth_accretion_transition
          
          subroutine update_stellar_structure(s, id, startup, M_BH_new, J_BH_new, L_BH, R_B, M_dot, &
                                              rad_eff, dt, rho, ierr)
