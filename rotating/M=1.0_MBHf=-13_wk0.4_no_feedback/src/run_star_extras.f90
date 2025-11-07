@@ -98,15 +98,20 @@
             real(dp) :: M_dot, dm, R_B, L_BH, new_core_mass, core_avg_rho, core_avg_eps
             real(dp) :: j_B, j_B_div_j_ISCO, j_ISCO_ref
             real(dp) :: rad_eff, con_eff, timestep_factor, max_accretion_fraction
-            real(dp) :: transition_width
+            real(dp) :: transition_width, transition_selector
+            logical :: use_smooth_transition
    
             ierr = 0
-            transition_width = 0.5d0 ! Set default transition width
-            
-            
+                        
             ! Get control parameters and physical quantities
             call get_control_parameters(s, rad_eff, con_eff, timestep_factor, max_accretion_fraction)
             call get_physical_quantities(s, dt, G, c_s, rho, opacity, P_rad, P_gas, gamma1, nabla_ad)
+            
+            transition_selector = s% x_ctrl(7)
+            use_smooth_transition = (transition_selector < 0d0)
+            if (use_smooth_transition) then
+               transition_width = max(1d-6, -transition_selector)
+            endif
             
             ! Get black hole properties
             M_BH = s% xtra(1)
@@ -125,29 +130,30 @@
             j_B_div_j_ISCO = j_B / j_ISCO_ref
 
 
-
-            ! Use smooth blending between the two regimes
-            call smooth_accretion_transition(s, M_BH, J_BH, j_B, j_B_div_j_ISCO, &
-               G, c_s, rho, opacity, gamma1, dt, &
-               rad_eff, con_eff, timestep_factor, &
-               max_accretion_fraction, transition_width, &
-               M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
-
-            if (ierr /= 0) return
-            
-            ! if (j_B_div_j_ISCO < 1.0_dp) then
-            !    ! Bondi accretion without disk
-            !    call bondi_accretion_no_disk(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, dt, &
-            !                                 timestep_factor, max_accretion_fraction, &
-            !                                 M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
-            ! else
-            !    ! Disk accretion with feedback
-            !    call disk_accretion_with_feedback(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, gamma1, dt, &
-            !                                      rad_eff, con_eff, timestep_factor, &
-            !                                      M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B)
-            ! endif
-            
-            ! if (ierr /= 0) return
+            if (use_smooth_transition) then
+               ! Use smooth blending between the two regimes
+               call smooth_accretion_transition(s, M_BH, J_BH, j_B, j_B_div_j_ISCO, &
+                  G, c_s, rho, opacity, gamma1, dt, &
+                  rad_eff, con_eff, timestep_factor, &
+                  max_accretion_fraction, transition_width, &
+                  M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
+               
+               if (ierr /= 0) return
+            else
+               ! Use a sharp transition based on j_B/j_ISCO
+               if (j_B_div_j_ISCO < 1.0_dp) then
+                  call bondi_accretion_no_disk(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, dt, &
+                                               timestep_factor, max_accretion_fraction, &
+                                               M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B, ierr)
+                  if (ierr /= 0) return
+                  !write(*,*) 'SHARP TRANSITION MODE: Bondi accretion (no disk)'
+               else
+                  call disk_accretion_with_feedback(s, M_BH, J_BH, j_B, G, c_s, rho, opacity, gamma1, dt, &
+                                                    rad_eff, con_eff, timestep_factor, &
+                                                    M_BH_new, J_BH_new, M_dot, dm, L_BH, R_B)
+                  !write(*,*) 'SHARP TRANSITION MODE: Disk accretion'
+               endif
+            endif
             
             ! Update stellar structure
             call update_stellar_structure(s, id, startup, M_BH_new, J_BH_new, L_BH, R_B, M_dot, &
@@ -484,15 +490,15 @@
             
             ! Print transition information
             if (alpha > 0d0 .and. alpha < 1d0) then
-               write(*,*) 'SMOOTH TRANSITION MODE'
-               write(*,*) '  j_B/j_ISCO = ', j_B_div_j_ISCO
-               write(*,*) '  Blending factor (alpha) = ', alpha
-               write(*,*) '  Bondi weight = ', 1d0 - alpha
-               write(*,*) '  Disk weight = ', alpha
+               write(*,*) '--- SMOOTH TRANSITION MODE ---'
+               write(*,*) 'j_B/j_ISCO = ', j_B_div_j_ISCO
+               write(*,*) 'Blending factor (alpha) = ', alpha
+               write(*,*) 'Bondi weight = ', 1d0 - alpha
+               write(*,*) 'Disk weight = ', alpha
             else if (alpha == 0d0) then
-               write(*,*) 'Pure Bondi Accretion (no disk)'
+               write(*,*) '--- Pure BONDI Accretion (no disk) ---'
             else
-               write(*,*) 'Pure Disk Accretion'
+               write(*,*) '--- Pure DISK Accretion ---'
             endif
             
          end subroutine smooth_accretion_transition

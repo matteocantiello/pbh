@@ -132,9 +132,9 @@
     x_ctrl(4) =  1 ! 1d-3       ! stop when BH reaches this mass 
     x_ctrl(5) =  0.01           ! max fraction of star accreted in one timestep 
     x_ctrl(6) =  0.0            ! BH initial angular momentum (CGS)
+    x_ctrl(7) = -0.5            ! transition selector (<0 smooth w/|value| width, >=0 sharp)
 
     steps_before_use_gold_tolerances = 100
     !energy_eqn_option = 'dedt'
     !use_gold_tolerances = .true.
 / ! end of controls namelist
-
