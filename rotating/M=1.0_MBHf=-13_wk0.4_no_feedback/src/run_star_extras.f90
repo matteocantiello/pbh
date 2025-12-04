@@ -576,7 +576,10 @@
             s% xtra(13) = nabla_ad
             s% xtra(14) = safe_log10(j_B_div_j_ISCO)
             s% xtra(15) = J_BH_new
-            
+            ! xtra(16) reserved for future use (L(1))
+            s% xtra(17) = rho
+            s% xtra(18) = s% csound(s% nz)
+
          end subroutine store_diagnostics
          
          
@@ -685,7 +688,7 @@
             ierr = 0
             call star_ptr(id, s, ierr)
             if (ierr /= 0) return
-            how_many_extra_history_columns = 16
+            how_many_extra_history_columns = 18
          end function how_many_extra_history_columns
          
          
@@ -703,9 +706,9 @@
             call star_ptr(id, s, ierr)
             if (ierr /= 0) return
             
-            names(1:16) = 'empty'
-            vals(1:16) = -1d99
-            
+            names(1:18) = 'empty'
+            vals(1:18) = -1d99
+             
    
             if (s% x_logical_ctrl(1)) then 
                 names(1) = "M_BH"
@@ -740,6 +743,10 @@
                 vals(15) = s% csound(s% nz)   ! cm/s
                 names(16) = "J_BH"
                 vals(16) = s% xtra(15)   ! cm^2/s  
+                names(17) = "rho_center"
+                vals(17) = s% xtra(17)   ! g/cm^2  
+                names(18) = "c_s_center"
+                vals(18) = s% xtra(18)   ! cm/s  
             end if
             
             ! note: do NOT add the extras names to history_columns.list
